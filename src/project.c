@@ -41,22 +41,6 @@ void detectMovement() {
 }
 
 
-
-/*
-Sensor Task
-Detects movement and conerts it to dot or dash
-- detectMovement()
-
-*/
-
-/*
-Print task
-Prints the current character on the console
-- displayOutput()
-- button interrupt, 
-*/
-
-
 void button_interrupt() {
     /*
     
@@ -65,17 +49,38 @@ void button_interrupt() {
 
 
 // Terminal communication
-void displayOutput(char current_str[]) {
+void displayOutput(char current_char) {
     /*
     Displays the current morse code string and resets it.
     */
-    printf("%s\n", current_str);
-    current_str[0] = "\0"; // Reset string after displaying
+    printf("%s\n", current_char);
+    current_char = NULL; // Reset string after displaying
     state = WAITING;
 }
 
 
+// Task functions
+void sensor_task() {
+    /*
+    Detects movement and conerts it to dot or dash
+        - detectMovement()
+    */
 
+}
+
+void button_task() {
+    /*
+    Prints the current character on the console
+        - displayOutput()
+        - button interrupt, 
+    */
+   while(1) {
+    displayOutput();
+    vTaskdelay(1000);
+
+   }
+
+}
 
 
 // Main function for initializing everything
@@ -94,5 +99,6 @@ int main() {
         case RECORDING:
             break;
     }
-
+    vTaskStartScheduler(); // Start FreeRTOS
+    return 0;
 }
