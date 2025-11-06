@@ -54,10 +54,10 @@ void button_interrupt() {
 // Terminal communication
 void displayOutput(char current_char) {
     /*
-    Displays the current morse code string and resets it.
+    Displays the current morse code character.
     */
     printf("%s\n", current_char);
-    current_char = NULL; // Reset string after displaying
+    current_character = "\0"; // Reset global character
     state = WAITING;
 }
 
@@ -68,6 +68,9 @@ void sensor_task() {
     Detects movement and conerts it to dot or dash
         - detectMovement()
     */
+   while(1) {
+    vTaskdelay(1000);
+   }
 
 }
 
@@ -91,6 +94,9 @@ int main() {
     stdio_init_all();
     init_hat_sdk();
     sleep_ms(300);
+
+    // Task Creation
+    
 
     switch(state) {
         case WAITING:
