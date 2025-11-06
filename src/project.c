@@ -22,8 +22,11 @@ char current_str[]; // string of all the characters received so far (TIER 2)
 programState state = WAITING;
 
 // Prototypes
-void displayOutput(char current_str[]);
+void displayOutput(char current_char);
 void detectMovement();
+void button_interrupt();
+void sensor_task();
+void button_task();
 
 
 
@@ -75,7 +78,7 @@ void button_task() {
         - button interrupt, 
     */
    while(1) {
-    displayOutput();
+    displayOutput(current_character);
     vTaskdelay(1000);
 
    }
