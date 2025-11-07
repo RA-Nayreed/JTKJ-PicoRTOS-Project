@@ -8,6 +8,8 @@
 #include <inttypes.h>
 // Copied and pasted these from main.c
 
+#include <tusb.h>
+
 // This file to be used for the project itself. Main.c was exercise session 2.
 // Although the tasks are missing from it because it was never pushed to the repository.
 
@@ -111,6 +113,19 @@ void button_task(void *arg) {
 
 }
 
+
+
+
+
+
+void usb_task(void *arg) {
+    (void)arg;
+    while (1) {
+        tud_task();  // keep USB running
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
 void gpio_callback(uint gpio, uint32_t events) {
     /*
     Apparently "on the Pico SDK, only one global IRQ callback function can be registered using
@@ -123,11 +138,17 @@ void gpio_callback(uint gpio, uint32_t events) {
     }
 }
 
+
+
+
+
+
+
 // Main function for initializing everything
 int main() {
     stdio_init_all();
     init_hat_sdk();
-    sleep_ms(300);
+    sleep_ms(2000);
 
     // Button Interrupts
     gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_RISE, true, &gpio_callback);
@@ -136,6 +157,7 @@ int main() {
     // Task Creation
     xTaskCreate(sensor_task, "Sensor Task", 256, NULL, 1, NULL);
     xTaskCreate(button_task, "Button Task", 256, NULL, 1, NULL);
+    xTaskCreate(usb_task, "USB Task", 256, NULL, 2, NULL);
 
     vTaskStartScheduler(); // Start FreeRTOS
     return 0;
