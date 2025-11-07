@@ -99,17 +99,17 @@ static void imu_task(void *arg) {
                 
                 // This is our position detection logic (Req 2.5.5, 2.5.7)
                 
-                if (az < -0.9) {
+                if (az < -0.8) {
                     // Device is FLAT (Z-axis pointing down at -1g)
                     const char* dash = "-";
                     xQueueSend(xMorseQueue, &dash, 0); // Send "dash" to queue
-                    vTaskDelay(pdMS_TO_TICKS(400)); // Delay to prevent flooding
+                    vTaskDelay(pdMS_TO_TICKS(800)); // Delay to prevent flooding
                 } 
-                else if (ay < -0.9) {
+                else if (ay < -0.8) {
                     // Device is 90-DEGREES (Y-axis pointing down at -1g)
                     const char* dot = ".";
                     xQueueSend(xMorseQueue, &dot, 0); // Send "dot" to queue
-                    vTaskDelay(pdMS_TO_TICKS(400)); // Delay to prevent flooding
+                    vTaskDelay(pdMS_TO_TICKS(800)); // Delay to prevent flooding
                 }
             }
         } // END of "if (state == RECORDING)"
