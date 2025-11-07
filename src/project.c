@@ -10,6 +10,11 @@
 
 #include <tusb.h>
 
+/* --- Definitions --- */
+#define DEFAULT_STACK_SIZE 2048
+#define CDC_ITF_TX 1 // We send data to the Serial Client on Interface 1
+
+
 // This file to be used for the project itself. Main.c was exercise session 2.
 // Although the tasks are missing from it because it was never pushed to the repository.
 
@@ -118,11 +123,10 @@ void button_task(void *arg) {
 
 
 
-void usb_task(void *arg) {
+static void usb_task(void *arg) {
     (void)arg;
     while (1) {
-        tud_task();  // keep USB running
-        vTaskDelay(pdMS_TO_TICKS(10));
+        tud_task();
     }
 }
 
@@ -150,6 +154,8 @@ int main() {
     init_hat_sdk();
     sleep_ms(2000);
 
+    TaskHandle_t hUsb;
+
     // Button Interrupts
     gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_RISE, true, &gpio_callback);
     gpio_set_irq_enabled(BUTTON2, GPIO_IRQ_EDGE_RISE, true);
@@ -157,8 +163,15 @@ int main() {
     // Task Creation
     xTaskCreate(sensor_task, "Sensor Task", 256, NULL, 1, NULL);
     xTaskCreate(button_task, "Button Task", 256, NULL, 1, NULL);
-    xTaskCreate(usb_task, "USB Task", 256, NULL, 2, NULL);
 
+
+    xTaskCreate(usb_task, "USB_Task", DEFAULT_STACK_SIZE, NULL, 3, &hUsb);
+    #if (configNUMBER_OF_CORES > 1)
+        // Pin the USB task to Core 0
+        vTaskCoreAffinitySet(hUsb, 1u << 0);
+    #endif
+
+    tusb_init();
     vTaskStartScheduler(); // Start FreeRTOS
     return 0;
 }
