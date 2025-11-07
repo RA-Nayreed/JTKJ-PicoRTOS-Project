@@ -50,20 +50,25 @@ void detectMovement() {
             current_character = '.';
         }
       }
-    await(100);
+    await(100); // wait for 100 ms, prevent flooding
 }
 
 
-void button_interrupt(int input) {
+void button_interrupt_space(int input) {
     /*
     Button interruption function
     */
-   if (input == BUTTON1) {
-    displayOutput(current_character);
-   }
-   else if (input == BUTTON2) {
-    state = RECORDING;
-   }
+    current_character = ' ';
+}
+
+void button_interrupt_record(int input) {
+    /*
+    Button interruption function for button 2
+    */
+    if (state == RECORDING)
+        state = WAITING;
+    else if (state == WAITING)
+        state = RECORDING;
 }
 
 
@@ -115,6 +120,7 @@ int main() {
 
     // Task Creation
     xTaskCreate(sensor_task, "Sensor Task", 256, NULL, 1, NULL);
+    xTaskCreate(button_task, "Button Task", 256, NULL, 1, NULL);
 
     vTaskStartScheduler(); // Start FreeRTOS
     return 0;
