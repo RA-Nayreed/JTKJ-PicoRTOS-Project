@@ -40,14 +40,30 @@ void detectMovement() {
     /*
     Detect movement from the device and save the corresponding character to current_character.
     */
-   // blah blah blah
+    int64_t ax, ay, az, gx, gy, gz, t;
+      if (ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
+
+        if (az < -0.8) {
+            current_character = '-';
+        }
+        else if (ay < -0.8) {
+            current_character = '.';
+        }
+      }
+    await(100);
 }
 
 
-void button_interrupt() {
+void button_interrupt(int input) {
     /*
-    
+    Button interruption function
     */
+   if (input == BUTTON1) {
+    displayOutput(current_character);
+   }
+   else if (input == BUTTON2) {
+    state = RECORDING;
+   }
 }
 
 
@@ -63,18 +79,20 @@ void displayOutput(char current_char) {
 
 
 // Task functions
-void sensor_task() {
+void sensor_task(void *arg) {
     /*
     Detects movement and conerts it to dot or dash
         - detectMovement()
     */
    while(1) {
+    detectMovement();
+    state = DATA_READY;
     vTaskdelay(1000);
    }
 
 }
 
-void button_task() {
+void button_task(void *arg) {
     /*
     Prints the current character on the console
         - displayOutput()
@@ -96,18 +114,8 @@ int main() {
     sleep_ms(300);
 
     // Task Creation
-    
+    xTaskCreate(sensor_task, "Sensor Task", 256, NULL, 1, NULL);
 
-    switch(state) {
-        case WAITING:
-            break;
-        case DISPLAYING:
-            break;
-        case DATA_READY:
-            break;
-        case RECORDING:
-            break;
-    }
     vTaskStartScheduler(); // Start FreeRTOS
     return 0;
 }
