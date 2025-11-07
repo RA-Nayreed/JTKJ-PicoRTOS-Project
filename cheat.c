@@ -18,13 +18,15 @@
 
 /* --- Global Variables (for Synchronization) --- */
 
-// This is our state machine (from project.c)
-// For Tier 1, we will just stay in the WAITING state.
+// This is our state machine
 typedef enum {
-    WAITING,
-    // (states for Tier 2)
+    IDLE,       // Not recording
+    RECORDING   // Recording IMU data
 } programState;
-programState state = WAITING;
+
+// 'volatile' is critical here because this variable is shared
+// between an ISR (btn_fxn) and a task (imu_task).
+volatile programState state = IDLE; // Start in the IDLE state
 
 // This is our synchronization mechanism (Req 2.5.4)
 // It will hold pointers to our morse symbols (e.g., ".")
@@ -44,17 +46,27 @@ static void usb_task(void *arg);
  * It sends a "space" symbol to the queue.
  */
 static void btn_fxn(uint gpio, uint32_t eventMask) {
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE; // Assume no task woken
+
     if (gpio == BUTTON1) {
         const char* space = " ";
-        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-
+        
         // Send the "space" pointer to the queue FROM THE ISR
         // This is interrupt-safe and wakes up the sender_task
         xQueueSendFromISR(xMorseQueue, &space, &xHigherPriorityTaskWoken);
-        
-        // If sender_task has higher priority, switch to it now
-        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     }
+    else if (gpio == BUTTON2) {
+        // NEW: Toggle the global recording state
+        if (state == IDLE) {
+            state = RECORDING;
+        } else {
+            state = IDLE;
+        }
+    }
+    
+    // If xHigherPriorityTaskWoken was set to pdTRUE by xQueueSendFromISR,
+    // perform a context switch.
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 /* --- Task Implementations --- */
@@ -73,33 +85,37 @@ static void imu_task(void *arg) {
     if (init_ICM42670() == 0) {
         ICM42670_start_with_default_values();
         // Send a debug message to USB port 0 (Serial Monitor)
-        usb_serial_print("IMU Initialized!\n");
+        usb_serial_print("IMU Initialized! Press Button 2 to start recording.\n"); // CHANGED
     } else {
         usb_serial_print("IMU FAILED to initialize.\n");
     }
 
     // This is the main task loop
     for (;;) {
-        // Read sensor data
-        if (ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
-            
-            // This is our position detection logic (Req 2.5.5, 2.5.7)
-            
-            if (az < -0.9) {
-                // Device is FLAT (Z-axis pointing down at -1g)
-                const char* dot = ".";
-                xQueueSend(xMorseQueue, &dot, 0); // Send "dot" to queue
-                vTaskDelay(pdMS_TO_TICKS(400)); // Delay to prevent flooding
-            } 
-            else if (ay < -0.9) {
-                // Device is 90-DEGREES (Y-axis pointing down at -1g)
-                const char* dash = "-";
-                xQueueSend(xMorseQueue, &dash, 0); // Send "dash" to queue
-                vTaskDelay(pdMS_TO_TICKS(400)); // Delay to prevent flooding
+        // CHANGED: Only read and process data if we are in the RECORDING state
+        if (state == RECORDING) {
+            // Read sensor data
+            if (ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
+                
+                // This is our position detection logic (Req 2.5.5, 2.5.7)
+                
+                if (az < -0.9) {
+                    // Device is FLAT (Z-axis pointing down at -1g)
+                    const char* dash = "-";
+                    xQueueSend(xMorseQueue, &dash, 0); // Send "dash" to queue
+                    vTaskDelay(pdMS_TO_TICKS(400)); // Delay to prevent flooding
+                } 
+                else if (ay < -0.9) {
+                    // Device is 90-DEGREES (Y-axis pointing down at -1g)
+                    const char* dot = ".";
+                    xQueueSend(xMorseQueue, &dot, 0); // Send "dot" to queue
+                    vTaskDelay(pdMS_TO_TICKS(400)); // Delay to prevent flooding
+                }
             }
-        }
-        
-        // Wait 100ms before polling again
+        } // END of "if (state == RECORDING)"
+
+        // Wait 100ms before the next loop iteration.
+        // If IDLE, this task just sleeps, consuming minimal CPU.
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
@@ -157,10 +173,14 @@ int main() {
     init_hat_sdk();
     sleep_ms(300); // Wait for hardware to settle
 
-    // Initialize Button 1 and attach our interrupt (Req 2.5.2)
+    // Initialize Buttons and attach our interrupt (Req 2.5.2)
     init_button1();
     gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_RISE, true, &btn_fxn);
 
+    // NEW: Initialize Button 2 and attach the SAME interrupt handler
+    init_button2();
+    gpio_set_irq_enabled_with_callback(BUTTON2, GPIO_IRQ_EDGE_RISE, true, &btn_fxn);
+    
     // Create the Queue (Req 2.5.4)
     // It can hold 10 "char*" pointers
     xMorseQueue = xQueueCreate(10, sizeof(char*));
