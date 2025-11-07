@@ -25,8 +25,8 @@ programState state = WAITING;
 // Prototypes
 void displayOutput(char current_char);
 void detectMovement();
-void button_interrupt_space();
-void button_interrupt_record();
+void button_interrupt_space(uint gpio, uint32_t eventMask);
+void button_interrupt_record(uint gpio, uint32_t eventMask);
 void sensor_task();
 void button_task();
 
@@ -55,14 +55,14 @@ void detectMovement() {
 }
 
 
-void button_interrupt_space(int input, uint32_t eventMask) {
+void button_interrupt_space(uint gpio, uint32_t eventMask) {
     /*
     Button interruption function
     */
     current_character = ' ';
 }
 
-void button_interrupt_record(int input, uint32_t eventMask) {
+void button_interrupt_record(uint gpio, uint32_t eventMask) {
     /*
     Button interruption function for button 2
     */
@@ -92,7 +92,7 @@ void sensor_task(void *arg) {
    while(1) {
     detectMovement();
     state = DATA_READY;
-    vTaskDelay(1000);
+    vTaskDelay(pdMS_TO_TICKS(1000));
    }
 
 }
@@ -105,12 +105,23 @@ void button_task(void *arg) {
     */
    while(1) {
     displayOutput(current_character);
-    vTaskDelay(1000);
+    vTaskDelay(pdMS_TO_TICKS(1000));
 
    }
 
 }
 
+void gpio_callback(uint gpio, uint32_t events) {
+    /*
+    Apparently "on the Pico SDK, only one global IRQ callback function can be registered using
+    gpio_set_irq_enabled_with_callback().""
+    */
+    if (gpio == BUTTON1) {
+        button_interrupt_space(gpio, events);
+    } else if (gpio == BUTTON2) {
+        button_interrupt_record(gpio, events);
+    }
+}
 
 // Main function for initializing everything
 int main() {
@@ -119,8 +130,8 @@ int main() {
     sleep_ms(300);
 
     // Button Interrupts
-    gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_RISE, true, &button_interrupt_space);
-    gpio_set_irq_enabled_with_callback(BUTTON2, GPIO_IRQ_EDGE_RISE, true, &button_interrupt_record);
+    gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_RISE, true, &gpio_callback);
+    gpio_set_irq_enabled(BUTTON2, GPIO_IRQ_EDGE_RISE, true);
     
     // Task Creation
     xTaskCreate(sensor_task, "Sensor Task", 256, NULL, 1, NULL);
