@@ -5,6 +5,7 @@
 #include <queue.h>
 #include <task.h>
 #include "tkjhat/sdk.h"
+#include <inttypes.h>
 // Copied and pasted these from main.c
 
 // This file to be used for the project itself. Main.c was exercise session 2.
@@ -18,13 +19,14 @@ typedef enum {
 } programState;
 
 char current_character;
-char current_str[]; // string of all the characters received so far (TIER 2)
+// char current_str[]; // string of all the characters received so far (TIER 2)
 programState state = WAITING;
 
 // Prototypes
 void displayOutput(char current_char);
 void detectMovement();
-void button_interrupt();
+void button_interrupt_space();
+void button_interrupt_record();
 void sensor_task();
 void button_task();
 
@@ -40,7 +42,7 @@ void detectMovement() {
     /*
     Detect movement from the device and save the corresponding character to current_character.
     */
-    int64_t ax, ay, az, gx, gy, gz, t;
+    float ax, ay, az, gx, gy, gz, t;
       if (ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
 
         if (az < -0.8) {
@@ -50,18 +52,17 @@ void detectMovement() {
             current_character = '.';
         }
       }
-    await(100); // wait for 100 ms, prevent flooding
 }
 
 
-void button_interrupt_space(int input) {
+void button_interrupt_space(int input, uint32_t eventMask) {
     /*
     Button interruption function
     */
     current_character = ' ';
 }
 
-void button_interrupt_record(int input) {
+void button_interrupt_record(int input, uint32_t eventMask) {
     /*
     Button interruption function for button 2
     */
@@ -77,8 +78,7 @@ void displayOutput(char current_char) {
     /*
     Displays the current morse code character.
     */
-    printf("%s\n", current_char);
-    current_character = "\0"; // Reset global character
+    printf("%c\n", current_char);
     state = WAITING;
 }
 
@@ -92,7 +92,7 @@ void sensor_task(void *arg) {
    while(1) {
     detectMovement();
     state = DATA_READY;
-    vTaskdelay(1000);
+    vTaskDelay(1000);
    }
 
 }
@@ -105,7 +105,7 @@ void button_task(void *arg) {
     */
    while(1) {
     displayOutput(current_character);
-    vTaskdelay(1000);
+    vTaskDelay(1000);
 
    }
 
@@ -118,6 +118,10 @@ int main() {
     init_hat_sdk();
     sleep_ms(300);
 
+    // Button Interrupts
+    gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_RISE, true, &button_interrupt_space);
+    gpio_set_irq_enabled_with_callback(BUTTON2, GPIO_IRQ_EDGE_RISE, true, &button_interrupt_record);
+    
     // Task Creation
     xTaskCreate(sensor_task, "Sensor Task", 256, NULL, 1, NULL);
     xTaskCreate(button_task, "Button Task", 256, NULL, 1, NULL);
