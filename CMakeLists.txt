@@ -136,7 +136,7 @@ if (PICO_CYW43_SUPPORTED)
 endif()
 
 #Support for stdio (printf, fwrite, puts...) via usb or UART. 
-pico_enable_stdio_usb(${MAIN_TARGET} 1)
+pico_enable_stdio_usb(${MAIN_TARGET} 0)
 pico_enable_stdio_uart(${MAIN_TARGET} 0)
 
 # Create different output files: 
