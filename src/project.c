@@ -1,3 +1,12 @@
+/*
+ * JTKJ Module2 Final Project - Tier 1
+ * Authors: Rezwan Ahmad Nayreed, Joni Lahtinen and Aati Samuel Strömmer	
+ * Date: 2025-11-10
+ * Hardware: RP2040 + TKJ HAT (ICM42670), two buttons
+ * Summary: IMU-based Morse transmitter over USB CDC using FreeRTOS
+ */
+
+
 #include <pico/stdlib.h>
 #include <FreeRTOS.h>
 #include <task.h>
@@ -33,8 +42,6 @@ static inline void display_symbol(char c) {
 }
 
 // Tasks
-
-// >>> This task keeps the SAME decision logic you provided <<<
 static void imu_task(void *arg) {
     (void)arg;
     float ax, ay, az, gx, gy, gz, t;
@@ -106,6 +113,7 @@ static void gpio_callback(uint gpio, uint32_t events) {
 
 
 int main(void) {
+    // Initializations
     init_hat_sdk();
     sleep_ms(300);
 

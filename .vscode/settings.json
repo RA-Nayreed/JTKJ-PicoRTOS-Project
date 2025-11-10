@@ -69,6 +69,7 @@
         "freertos.h": "c",
         "pdm_microphone.h": "c",
         "pins.h": "c",
-        "helper.h": "c"
+        "helper.h": "c",
+        "queue.h": "c"
     }
 }
