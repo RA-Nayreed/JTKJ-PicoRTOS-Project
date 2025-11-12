@@ -27,7 +27,7 @@ typedef enum {
 } programState;
 
 char current_character;
-// char current_str[]; // string of all the characters received so far (TIER 2)
+char current_str[10];// string of all the characters received so far (TIER 2). Note: Arbitrary length so we won't get screwed by memory.
 programState state = WAITING;
 
 // Prototypes
@@ -37,13 +37,8 @@ void button_interrupt_space(uint gpio, uint32_t eventMask);
 void button_interrupt_record(uint gpio, uint32_t eventMask);
 void sensor_task();
 void button_task();
-
-
-
-// I'm guessing we should make a statemachine task that uses switch statements
-// to determine which state we're in?
-
-
+void translate_letter(); // TODO: turns current_str[] into an alphabetic letter and calls displayOutput()
+void add_to_str(char current_char); // TODO: adds character to the end of current_str[] 
 
 
 void detectMovement() {
@@ -54,20 +49,49 @@ void detectMovement() {
       if (ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
 
         if (az < -0.8) {
-            current_character = '-';
+            add_to_str('-');
         }
         else if (ay < -0.8) {
-            current_character = '.';
+            add_to_str('.'); //These could be printed for debugging too
         }
       }
 }
 
 
+void add_to_str(char current_char){
+    /*
+    Checks if current_str has space for a character and adds it.
+    If current_str is full, starts from the beginning <- can be adjusted depending on intended behavior.
+    */
+    int len = strlen(current_str);
+    if (len < sizeof(current_str)-1){
+        current_str[len] = current_char;
+        current_str[len+1] = '\0';
+    } else{
+        current_str[0] = current_char;
+        current_str[1] = '\0';
+    }
+}
+
+void create_letter(){
+    /* 
+    Takes morse code from current_str[] and compares it to morse alphabet. 
+    Stores result in char letter, calls displayOutput with it.
+    */
+   char letter;
+   // comparisons go here
+   displayOutput(letter);
+   current_str[0] = '\0';
+}
+
 void button_interrupt_space(uint gpio, uint32_t eventMask) {
     /*
     Button interruption function
     */
-    current_character = ' ';
+    //current_character = ' ';
+
+    //TODO: create_letter();
+
 }
 
 void button_interrupt_record(uint gpio, uint32_t eventMask) {
@@ -91,7 +115,7 @@ void displayOutput(char current_char) {
     // printf("%c\n", current_char); // This will not work without stdio_init_all()
 
     // Create a 2-byte buffer: [character, null-terminator]
-    char buf[2] = { current_character, '\0' };
+    char buf[2] = { current_char, '\0' }; // These were borken: they were taking global current_character instead of local current_char
 
     // Send the character to the "data" serial port (CDC1)
     if (tud_cdc_n_connected(CDC_ITF_TX)) {
@@ -100,7 +124,7 @@ void displayOutput(char current_char) {
     }
 
     // (Optional) Send to the "debug" serial port (CDC0) for logging
-    char debug_buf[4] = { current_character, '\r', '\n', '\0' };
+    char debug_buf[2] = { current_char, '\0' }; // These were borken: they were taking global current_character instead of local current_char
     usb_serial_print(debug_buf); // This prints to CDC0
 
     state = WAITING;
@@ -121,19 +145,21 @@ void sensor_task(void *arg) {
 
 }
 
-void button_task(void *arg) {
-    /*
+/*void button_task(void *arg) {
+    
     Prints the current character on the console
         - displayOutput()
         - button interrupt, 
-    */
+        ! I have no idea what this task actually does beyond constantly printing. Completely unrelated to buttons.
+         ALL BUTTON STUFF IS HANDLED BY INTERRUPT RIGHT NOW! Should likely be deleted for TIER 2
+    
    while(1) {
-    displayOutput(current_character);
+    displayOutput(current_character); 
     vTaskDelay(pdMS_TO_TICKS(1000));
 
    }
 
-}
+} */
 
 
 
@@ -185,7 +211,7 @@ int main() {
 
     // Button Interrupts
     gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_RISE, true, &gpio_callback);
-    gpio_set_irq_enabled(BUTTON2, GPIO_IRQ_EDGE_RISE, true);
+    //Other button call here was redundant
     
     // Task Creation
     xTaskCreate(sensor_task, "Sensor Task", 2048, NULL, 1, NULL); // Increased stack
