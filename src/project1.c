@@ -26,6 +26,17 @@ typedef enum {
     RECORDING
 } programState;
 
+const char *morse[] = {
+    ".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---",
+    "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-",
+    "..-", "...-", ".--", "-..-", "-.--", "--.."
+};
+const char letters[] = {
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J',
+    'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
+    'U', 'V', 'W', 'X', 'Y', 'Z'
+};
+
 char current_character;
 char current_str[10];// string of all the characters received so far (TIER 2). Note: Arbitrary length so we won't get screwed by memory.
 programState state = WAITING;
@@ -75,23 +86,24 @@ void add_to_str(char current_char){
 
 void create_letter(){
     /* 
-    Takes morse code from current_str[] and compares it to morse alphabet. 
-    Stores result in char letter, calls displayOutput with it.
+    Takes morse code from current_str[] and compares it to morse alphabet, then prints that letter. 
+    Also resets current_str whether or not it's a legal character.
     */
-   char letter;
-   // comparisons go here
-   displayOutput(letter);
-   current_str[0] = '\0';
+   for (int i = 0; i < 26; i++) {
+        if (strcmp(current_str, morse[i]) == 0) {
+            displayOutput(letters[i]);
+        }
+    }
+    current_str[0] = '\0';
 }
 
 void button_interrupt_space(uint gpio, uint32_t eventMask) {
     /*
     Button interruption function
+    Tries to turn morse code in current_str into a letter and resets the array
     */
     //current_character = ' ';
-
-    //TODO: create_letter();
-
+    create_letter();
 }
 
 void button_interrupt_record(uint gpio, uint32_t eventMask) {
