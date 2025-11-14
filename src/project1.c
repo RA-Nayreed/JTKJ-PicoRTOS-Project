@@ -6,8 +6,6 @@
 #include <task.h>
 #include "tkjhat/sdk.h"
 #include <inttypes.h>
-
-// FIX 1: Add includes for TinyUSB and the debug helper library
 #include <tusb.h>
 #include "usbSerialDebug/helper.h"
 
@@ -49,7 +47,7 @@ void button_interrupt_record(uint gpio, uint32_t eventMask);
 void sensor_task();
 void button_task();
 void translate_letter(); // TODO: turns current_str[] into an alphabetic letter and calls displayOutput()
-void add_to_str(char current_char); // TODO: adds character to the end of current_str[] 
+void add_to_str(char current_char);
 
 
 void detectMovement() {
@@ -84,7 +82,7 @@ void add_to_str(char current_char){
     }
 }
 
-void create_letter(){
+void translate_letter(){
     /* 
     Takes morse code from current_str[] and compares it to morse alphabet, then prints that letter. 
     Also resets current_str whether or not it's a legal character.
@@ -103,7 +101,7 @@ void button_interrupt_space(uint gpio, uint32_t eventMask) {
     Tries to turn morse code in current_str into a letter and resets the array
     */
     //current_character = ' ';
-    create_letter();
+    translate_letter();
 }
 
 void button_interrupt_record(uint gpio, uint32_t eventMask) {
@@ -113,7 +111,7 @@ void button_interrupt_record(uint gpio, uint32_t eventMask) {
     if (state == RECORDING)
         state = WAITING;
     else if (state == WAITING)
-        state = RECORDING;char current_character;
+        state = RECORDING;
 }
 
 
@@ -122,9 +120,6 @@ void displayOutput(char current_char) {
     /*
     Displays the current morse code character.
     */
-    
-    // FIX 2: Replace printf() with the correct USB functions
-    // printf("%c\n", current_char); // This will not work without stdio_init_all()
 
     // Create a 2-byte buffer: [character, null-terminator]
     char buf[2] = { current_char, '\0' }; // These were borken: they were taking global current_character instead of local current_char
@@ -205,13 +200,10 @@ void gpio_callback(uint gpio, uint32_t events) {
 
 // Main function for initializing everything
 int main() {
-    // FIX 3: DO NOT call stdio_init_all(). This conflicts with tusb_init().
-    // stdio_init_all();
-    
+    // Initializations
     init_hat_sdk();
     sleep_ms(300); // Wait for HAT I2C to be ready
 
-    // FIX 4: Initialize the HAT sensors before using them
     init_button1(); // Initialize button 1 pin
     init_button2(); // Initialize button 2 pin
     if (init_ICM42670() == 0) { // Initialize IMU
@@ -227,7 +219,7 @@ int main() {
     
     // Task Creation
     xTaskCreate(sensor_task, "Sensor Task", 2048, NULL, 1, NULL); // Increased stack
-    xTaskCreate(button_task, "Button Task", 1024, NULL, 1, NULL); // Increased stack
+    //xTaskCreate(button_task, "Button Task", 1024, NULL, 1, NULL); // Increased stack
 
 
     xTaskCreate(usb_task, "USB_Task", DEFAULT_STACK_SIZE, NULL, 3, &hUsb);
@@ -236,8 +228,6 @@ int main() {
         vTaskCoreAffinitySet(hUsb, 1u << 0);
     #endif
 
-    // FIX 5: Initialize TinyUSB and the helper library
-    // This MUST be done just before starting the scheduler
     tusb_init();
     usb_serial_init(); 
     

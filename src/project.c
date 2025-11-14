@@ -22,6 +22,7 @@ typedef enum { WAITING, RECORDING } programState;
 
 static volatile programState state = WAITING;
 static QueueHandle_t xMorseQueue;
+
 // Task Prototypes 
 static void imu_task(void *arg);
 static void print_task(void *arg);
