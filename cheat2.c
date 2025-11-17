@@ -1,12 +1,3 @@
-/*
- * JTKJ Module2 Final Project - Tier 1
- * Authors: Rezwan Ahmad Nayreed, Joni Lahtinen and Aati Samuel Strömmer	
- * Date: 2025-11-10
- * Hardware: RP2040 + TKJ HAT (ICM42670), two buttons
- * Summary: IMU-based Morse transmitter over USB CDC using FreeRTOS
- */
-
-
 #include <pico/stdlib.h>
 #include <FreeRTOS.h>
 #include <task.h>
@@ -19,7 +10,10 @@
 #define QUEUE_LEN  32
 #define BUZZER_PIN 17
 
-typedef enum { WAITING, RECORDING, RECEIVING } programState;
+typedef enum { WAITING, RECORDING } programState;
+
+typedef enum { BUZZER_IDLE, BUZZER_ACTIVE } BuzzerState;
+static volatile BuzzerState buzzerState = BUZZER_IDLE;
 
 static volatile programState state = WAITING;
 static QueueHandle_t xMorseQueue;
@@ -30,34 +24,17 @@ static void print_task(void *arg);
 static void usb_task(void *arg);
 static void gpio_callback(uint gpio, uint32_t events);
 static inline void enqueue_symbol_from_isr(char c);
-static void buzzer_beep(uint16_t duration);
 
 // Helpers
 static inline void display_symbol(char c) {
-
-    // USB transmit
+    // send to CDC1 (data)
     char out[2] = { c, '\0' };
     if (tud_cdc_n_connected(CDC_ITF_TX)) {
         tud_cdc_n_write_str(CDC_ITF_TX, out);
         tud_cdc_n_write_flush(CDC_ITF_TX);
     }
-
-    // Debug
-    usb_serial_print(out);
-
-    // -------- FEEDBACK FOR SENT SYMBOL --------
-    buzzer_beep(50);   // short beep = message sent
-}
-
-void lcd_write_char(char c) {
-    char buf[2] = {c, '\0'};
-    hat_display_puts(buf);
-}
-
-void buzzer_beep(uint16_t duration) {
-    gpio_put(BUZZER_PIN, 1);
-    vTaskDelay(pdMS_TO_TICKS(duration));
-    gpio_put(BUZZER_PIN, 0);
+    char dbg[2] = { c, '\0' };
+    usb_serial_print(dbg);
 }
 
 // Tasks
@@ -92,6 +69,32 @@ static void imu_task(void *arg) {
     }
 }
 
+static void buzzer_task(void *arg) {
+    (void)arg;
+    char symbol;
+    for (;;) {
+        if (xQueueReceive(xMorseQueue, &symbol, portMAX_DELAY) == pdTRUE) {
+            buzzerState = BUZZER_ACTIVE;
+            switch(symbol) {
+                case '.':
+                    gpio_put(BUZZER_PIN, 1);
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                    gpio_put(BUZZER_PIN, 0);
+                    break;
+                case '-':
+                    gpio_put(BUZZER_PIN, 1);
+                    vTaskDelay(pdMS_TO_TICKS(600));
+                    gpio_put(BUZZER_PIN, 0);
+                    break;
+                case ' ':
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                    break;
+            }
+            buzzerState = BUZZER_IDLE;
+        }
+    }
+}
+
 static void print_task(void *arg) {
     (void)arg;
     char c;
@@ -108,22 +111,10 @@ static void print_task(void *arg) {
 static void usb_task(void *arg) {
     (void)arg;
     while (1) {
-        tud_task();
-
-        // Receive symbols
-        if (tud_cdc_n_available(0)) {
-             state = RECEIVING;
-
-            char c = tud_cdc_n_read_char(0);
-            lcd_write_char(c);
-            buzzer_beep(80);
-
-            state = WAITING;
-        }
-        vTaskDelay(pdMS_TO_TICKS(5));
+        tud_task(); // TinyUSB polling
+        // Optional: vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
-
 
 // GPIO / ISR 
 static inline void enqueue_symbol_from_isr(char c) {
@@ -148,17 +139,12 @@ int main(void) {
     init_hat_sdk();
     sleep_ms(300);
 
-    // LCD init
-    hat_display_clear();
-    hat_display_set_cursor(0, 0);
-
-    // Buzzer init
-    gpio_init(BUZZER_PIN);
-    gpio_set_dir(BUZZER_PIN, GPIO_OUT);
-    gpio_put(BUZZER_PIN, 0);
-
     init_button1();
     init_button2();
+
+    gpio_init(BUZZER_PIN);
+    gpio_set_dir(BUZZER_PIN, true);
+    gpio_put(BUZZER_PIN, 0);
 
     // one global IRQ callback in Pico SDK
     gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_RISE, true, &gpio_callback);
@@ -169,6 +155,7 @@ int main(void) {
     // Create tasks
     xTaskCreate(imu_task,   "IMU",   2048, NULL, 2, NULL);
     xTaskCreate(print_task, "Print", 1024, NULL, 2, NULL);
+    xTaskCreate(buzzer_task, "Buzzer", 1024, NULL, 2, NULL);
 
     TaskHandle_t hUsb;
     xTaskCreate(usb_task, "USB", 2048, NULL, 3, &hUsb);
