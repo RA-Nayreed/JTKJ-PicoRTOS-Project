@@ -1,5 +1,5 @@
 /*
- * JTKJ Module2 Final Project - Tier 1
+ * JTKJ Module2 Final Project - Tier 2
  * Authors: Rezwan Ahmad Nayreed, Joni Lahtinen and Aati Samuel Strömmer
 */
 
