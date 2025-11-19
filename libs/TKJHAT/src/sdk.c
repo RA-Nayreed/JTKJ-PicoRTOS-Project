@@ -34,7 +34,8 @@ SOFTWARE.
 #include <tkjhat/pdm_microphone.h>
 #include <stdio.h>
 #include <math.h>
-
+/*NAYREED*/
+#include <string.h>
 
 
 
@@ -501,8 +502,32 @@ void clear_display() {
 void stop_display() {
     ssd1306_poweroff(&disp);
 }
+/*
+NAYREED
+*/
+void scroll_text(const char *text, int16_t y, int delay_ms) {
+    if (!text) return;
 
+    // 1. Estimate text width: 6px per char (5px + 1px space) * scale 2 = 12px
+    int text_width = strlen(text) * 12; 
 
+    // 2. Scroll loop
+    // Start: Right edge (128)
+    // End:   Fully off-screen left (-text_width)
+    // Step:  Move 4 pixels left each frame (controls smoothness)
+    for (int x = 128; x > -text_width; x -= 4) { 
+        
+        ssd1306_clear(&disp); 
+        
+        // Cast x to uint32_t. When x is negative, this becomes a large number 
+        // which the library wraps around to correctly draw partial characters on the left edge.
+        ssd1306_draw_string(&disp, (uint32_t)x, (uint32_t)y, 2, text); 
+        
+        ssd1306_show(&disp);
+        
+        sleep_ms(delay_ms);
+    }
+}
 /* =========================
  *  LIGHT SENSOR VEML6030
  * =========================  */

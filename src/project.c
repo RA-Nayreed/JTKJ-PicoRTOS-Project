@@ -100,6 +100,7 @@ static void buzzer_task(void *arg);
 static void state_manager_task(void *arg);
 static void tinyusb_task(void *arg); 
 static void gpio_callback(uint gpio, uint32_t events);
+static const char* get_morse_from_char(char c);
 
 // ==========================================
 // --- Helper Functions ---
@@ -178,7 +179,15 @@ static void clear_tx_message(void) {
         xSemaphoreGive(xTxMsgMutex);
     }
 }
-
+// Helper: Converts English char to Morse string (e.g., 'A' -> ".-")
+// Returns NULL if not found
+static const char* get_morse_from_char(char c) {
+    if (c >= 'a' && c <= 'z') c -= 32; // Convert to uppercase
+    for (int i = 0; i < 36; i++) {
+        if (alphabet_map[i] == c) return morse_map[i];
+    }
+    return NULL;
+}
 /**
  * Queues a buzzer command. 
  * Packing freq and duration into a single uint32_t to save queue space.
@@ -415,43 +424,85 @@ static void usb_tx_task(void *arg) {
 static void usb_rx_task(void *arg) {
     (void)arg;
     char rx_buf[64];
+
     for (;;) {
+        // Check if USB CDC is connected and has data available
         if (tud_cdc_n_connected(CDC_ITF_TX) && tud_cdc_n_available(CDC_ITF_TX)) {
+            
+            // Read data from USB into local buffer
             uint32_t count = tud_cdc_n_read(CDC_ITF_TX, rx_buf, sizeof(rx_buf) - 1);
             
             if (count > 0) {
                 rx_buf[count] = '\0'; // Null-terminate
-                change_state(STATE_RECEIVING);
+                change_state(STATE_RECEIVING); // Update system status
                 
                 for (uint32_t i = 0; i < count; i++) {
                     char c = rx_buf[i];
-                    xQueueSend(xMorseRxQueue, &c, 0); // Trigger sound effect per char
-                    
-                    // Buffer incoming message
-                    if (g_rx_message.length < MSG_BUFFER_SIZE - 1) {
-                        g_rx_message.buffer[g_rx_message.length++] = c;
-                        g_rx_message.buffer[g_rx_message.length] = '\0';
-                    }
-                    
-                    // End of line detected: Show full message
-                    if (c == '\n') {
-                        change_state(STATE_DISPLAYING);
-                        display_text(g_rx_message.buffer);
-                        
-                        usb_serial_print("\n[RX]: ");
-                        usb_serial_print(g_rx_message.buffer);
-                        
-                        // Reset RX buffer
+
+                    // -------------------------------------------------
+                    // 1. End of Message Handling (Newline)
+                    // -------------------------------------------------
+                    if (c == '\n' || c == '\r') {
+                        // Send text to Display Queue
+                        if (g_rx_message.length > 0) {
+                            xQueueSend(xDisplayQueue, g_rx_message.buffer, 0);
+                            
+                            usb_serial_print("\n[RX translated]: ");
+                            usb_serial_print(g_rx_message.buffer);
+                            usb_serial_print("\n");
+                        }
+
+                        // --- NEW: Send "End of Message" token to Buzzer ---
+                        // We do NOT call change_state(STATE_IDLE) here anymore.
+                        // We let the buzzer do it when it finishes playing.
+                        char eom = '\0';
+                        xQueueSend(xMorseRxQueue, &eom, portMAX_DELAY);
+
+                        // Reset Buffer
                         memset(g_rx_message.buffer, 0, MSG_BUFFER_SIZE);
                         g_rx_message.length = 0;
                         
-                        vTaskDelay(pdMS_TO_TICKS(2000)); // Hold display
-                        change_state(STATE_IDLE);
+                        continue;
+                    }
+
+                    // -------------------------------------------------
+                    // 2. Character Translation & Audio Queuing
+                    // -------------------------------------------------
+                    const char* morse_code = get_morse_from_char(c);
+
+                    if (morse_code != NULL) {
+                        // A. Append translated Morse code to the text buffer
+                        // Check for buffer overflow before adding
+                        if (g_rx_message.length + strlen(morse_code) + 1 < MSG_BUFFER_SIZE) {
+                            strcat(g_rx_message.buffer, morse_code);
+                            strcat(g_rx_message.buffer, " "); // Add space between letters
+                            g_rx_message.length += strlen(morse_code) + 1;
+                        }
+
+                        // B. Queue individual symbols for the Buzzer
+                        for (int j = 0; morse_code[j] != '\0'; j++) {
+                            xQueueSend(xMorseRxQueue, &morse_code[j], 0);
+                        }
+                        // Add a small silence (space) between letters for audio clarity
+                        char gap = ' '; 
+                        xQueueSend(xMorseRxQueue, &gap, 0); 
+                    } 
+                    else if (c == ' ') {
+                        // Handle Space between words
+                        // Add 3 spaces to text buffer for visual separation
+                        if (g_rx_message.length + 3 < MSG_BUFFER_SIZE) {
+                            strcat(g_rx_message.buffer, "   ");
+                            g_rx_message.length += 3;
+                        }
+                        // Queue a space to the buzzer (adds longer silence)
+                        char gap = ' ';
+                        xQueueSend(xMorseRxQueue, &gap, 0);
                     }
                 }
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(50)); // Polling interval
+        // Yield to other tasks
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -461,7 +512,7 @@ static void usb_rx_task(void *arg) {
  */
 static void display_task(void *arg) {
     (void)arg;
-    char msg_buf[64];
+    char msg_buf[64]; // Note: Queue item size is 64 bytes
     init_display();
     clear_display();
     write_text("Ready!");
@@ -469,8 +520,16 @@ static void display_task(void *arg) {
     for (;;) {
         // Block until a message arrives in queue
         if (xQueueReceive(xDisplayQueue, msg_buf, portMAX_DELAY) == pdTRUE) {
-            clear_display();
-            write_text(msg_buf);
+            
+            // LOGIC: If message is long (> 10 chars), scroll it.
+            // Otherwise, treat it as a status message (like "IDLE") and show static.
+            if (strlen(msg_buf) > 10) {
+                scroll_text(msg_buf, 24, 30); 
+                // The text remains on screen after scrolling (off-screen left)
+            } else {
+                clear_display();
+                write_text(msg_buf);
+            }
         }
     }
 }
@@ -486,18 +545,25 @@ static void buzzer_task(void *arg) {
     init_buzzer();
     
     for (;;) {
-        // Priority 1: Explicit frequency commands
+        // Priority 1: Explicit frequency commands (e.g. from IMU)
         if (xQueueReceive(xBuzzerQueue, &cmd, 0) == pdTRUE) {
-            uint16_t freq = (cmd >> 16) & 0xFFFF; // Unpack freq
-            uint16_t duration = cmd & 0xFFFF;     // Unpack duration
+            uint16_t freq = (cmd >> 16) & 0xFFFF;
+            uint16_t duration = cmd & 0xFFFF;
             buzzer_play_tone(freq, duration);
         }
-        // Priority 2: Audio feedback for Morse playback
+        // Priority 2: Morse playback from USB
         else if (xQueueReceive(xMorseRxQueue, &morse_symbol, 0) == pdTRUE) {
-            if (morse_symbol == '.') buzzer_play_tone(800, 150);
+            
+            // --- NEW: Check for End of Message Token ---
+            if (morse_symbol == '\0') {
+                // The audio sequence is finished. NOW we can go to IDLE.
+                change_state(STATE_IDLE);
+            }
+            else if (morse_symbol == '.') buzzer_play_tone(800, 150);
             else if (morse_symbol == '-') buzzer_play_tone(800, 450);
             else if (morse_symbol == ' ') vTaskDelay(pdMS_TO_TICKS(200));
         }
+        
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
