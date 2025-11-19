@@ -151,6 +151,13 @@ static void send_tx_message(void) {
                 g_tx_message.buffer[g_tx_message.length++] = '\n';
                 g_tx_message.buffer[g_tx_message.length] = '\0';
                 g_tx_message.complete = true;
+                usb_serial_print("[Message Marked Complete]\n");
+            }
+            else{
+                g_tx_message.buffer[g_tx_message.length - 2] = '\n';
+                g_tx_message.buffer[g_tx_message.length - 1] = '\0';
+                g_tx_message.complete = true;
+                usb_serial_print("[Message Marked Complete with Truncation]\n");
             }
         }
         xSemaphoreGive(xTxMsgMutex);
@@ -327,7 +334,7 @@ static void usb_tx_task(void *arg) {
                 
                 send_tx_message();
                 change_state(STATE_SENDING);
-                continue;
+                
             }
             
             // --- 2. Morse Character Building ---
@@ -378,6 +385,7 @@ static void usb_tx_task(void *arg) {
         
         // --- 3. Sending Logic ---
         if (g_state == STATE_SENDING && g_tx_message.complete) {
+            usb_serial_print("\n[SENDING MESSAGE]\n");
             if (tud_cdc_n_connected(CDC_ITF_TX)) {
                 // Write buffer to USB CDC
                 tud_cdc_n_write(CDC_ITF_TX, g_tx_message.buffer, g_tx_message.length);
