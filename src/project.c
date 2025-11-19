@@ -151,14 +151,17 @@ static void send_tx_message(void) {
                 g_tx_message.buffer[g_tx_message.length++] = '\n';
                 g_tx_message.buffer[g_tx_message.length] = '\0';
                 g_tx_message.complete = true;
-                usb_serial_print("[Message Marked Complete]\n");
             }
             else{
                 g_tx_message.buffer[g_tx_message.length - 2] = '\n';
                 g_tx_message.buffer[g_tx_message.length - 1] = '\0';
                 g_tx_message.complete = true;
-                usb_serial_print("[Message Marked Complete with Truncation]\n");
             }
+        }
+        else{
+            g_tx_message.buffer[g_tx_message.length++] = '\n';
+            g_tx_message.buffer[g_tx_message.length] = '\0';
+            g_tx_message.complete = true;
         }
         xSemaphoreGive(xTxMsgMutex);
     }
@@ -349,11 +352,16 @@ static void usb_tx_task(void *arg) {
                         usb_serial_print(current_morse); 
                         usb_serial_print("\n");
                     }
+                    else {
+                        morse_len = 0;
+                        memset(current_morse, 0, sizeof(current_morse));
+                    }
                 } 
                 else if (symbol == ' ') {
                     // Space Button Pressed: End of current letter
                     if (morse_len == 0) {
-                        // Optional: handle actual spaces between words here if needed
+                        append_to_tx_message(' ');
+                        // Handle actual spaces between words
                     } 
                     else {
                         // --- Translation Logic ---
