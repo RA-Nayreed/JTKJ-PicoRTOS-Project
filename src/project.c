@@ -1,11 +1,22 @@
 /*
- * JTKJ Module2 Final Project - Tier 2 (Dual Mode RX)
+ * JTKJ Module 2 Final Project - Tier 2-3
  * Authors: Rezwan Ahmad Nayreed, Joni Lahtinen and Aati Samuel Strömmer
- * * Description:
- * This firmware implements a Morse Code communicator.
- * * NEW FEATURES (Dual Mode RX):
- * 1. Text-to-Morse: If PC sends "SOS", device plays "... --- ..." and displays it.
- * 2. Morse-to-Text: If PC sends "... --- ...", device plays it and displays "SOS".
+ * This is a morse Pico-based morse code communicator. 
+ * Button 1 is used for separating characters (short press) or adding spaces (double press).
+ * Button 2 is used for starting/stopping recording and sending message to terminal.
+ * Text sent into the device is translated to/from morse code and displayed on the screen.
+ * Included SDK has updated scrolling function for long messages.
+ * Parts of the program were generated using Gemini AI and manually curated/debugged by the authors.
+*/
+
+/*
+Documentation progress:
+- FreeRTOS tasks
+    - usb_tx_task
+    - usb_rx_task
+- Main
+
+Remove from list when finished
 */
 
 #include <pico/stdlib.h>
@@ -24,7 +35,7 @@
 // ==========================================
 
 #define CDC_ITF_TX 1  
-#define QUEUE_LEN  32 
+#define QUEUE_LEN  256 
 #define MSG_BUFFER_SIZE 256 
 
 #define DEBOUNCE_MS     50   
@@ -83,21 +94,26 @@ static SemaphoreHandle_t xStateMutex;
 static SemaphoreHandle_t xTxMsgMutex; 
 
 // Prototypes
-static void imu_task(void *arg);
-static void usb_tx_task(void *arg);
-static void usb_rx_task(void *arg);
-static void display_task(void *arg);
-static void buzzer_task(void *arg);
-static void state_manager_task(void *arg);
-static void tinyusb_task(void *arg); 
-static void gpio_callback(uint gpio, uint32_t events);
+static void imu_task(void *arg);/*NAYREED*/
+static void usb_tx_task(void *arg);/*AATI*/
+static void usb_rx_task(void *arg); /*NAYREED, JONI, AATI*/
+static void display_task(void *arg);/*NAYREED*/
+static void buzzer_task(void *arg);/*NAYREED*/
+static void state_manager_task(void *arg);/*JONI*/
+static void tinyusb_task(void *arg); /*AATI*/
+static void gpio_callback(uint gpio, uint32_t events);/*JONI*/
 
 // ==========================================
 // --- Helper Functions ---
 // ==========================================
 
 static void change_state(SystemState new_state) {
-    if (xSemaphoreTake(xStateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    /*
+    At core, this is a state machine.
+    Mutex prevents other tasks from changing the state at the same time
+    A short state-name message is sent to the display task via queue so the UI updates when the state changes.
+    */
+    if (xSemaphoreTake(xStateMutex, pdMS_TO_TICKS(100)) == pdTRUE) { // thread safety
         g_state = new_state;
         xSemaphoreGive(xStateMutex);
         
@@ -114,28 +130,34 @@ static void change_state(SystemState new_state) {
 }
 
 static void append_to_tx_message(char c) {
-    if (xSemaphoreTake(xTxMsgMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        if (g_tx_message.length < MSG_BUFFER_SIZE - 1) {
-            g_tx_message.buffer[g_tx_message.length++] = c;
-            g_tx_message.buffer[g_tx_message.length] = '\0';
+    /*
+    Adds a character to the global TX message buffer
+    */
+    if (xSemaphoreTake(xTxMsgMutex, pdMS_TO_TICKS(100)) == pdTRUE) {    // thread safety
+        if (g_tx_message.length < MSG_BUFFER_SIZE - 1) {                // check if there is space in the buffer
+            g_tx_message.buffer[g_tx_message.length++] = c;             // append character
+            g_tx_message.buffer[g_tx_message.length] = '\0';            // null terminator added
         }
         xSemaphoreGive(xTxMsgMutex);
     }
 }
 
 static void send_tx_message(void) {
-    if (xSemaphoreTake(xTxMsgMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    /*
+    Finalizes message. Ensures newline termination and marks it as complete
+    */
+    if (xSemaphoreTake(xTxMsgMutex, pdMS_TO_TICKS(100)) == pdTRUE) {    // thread safety
         // Ensure proper newline termination
-        if (g_tx_message.length > 0) {
-             if (g_tx_message.buffer[g_tx_message.length-1] != '\n') {
-                 if (g_tx_message.length < MSG_BUFFER_SIZE - 1) {
-                     g_tx_message.buffer[g_tx_message.length++] = '\n';
+        if (g_tx_message.length > 0) {                                  // non-empty message
+             if (g_tx_message.buffer[g_tx_message.length-1] != '\n') {  // check if last char is newline
+                 if (g_tx_message.length < MSG_BUFFER_SIZE - 1) {       // check space
+                     g_tx_message.buffer[g_tx_message.length++] = '\n'; // add new line and null terminator, string ends
                      g_tx_message.buffer[g_tx_message.length] = '\0';
                  }
              }
-             g_tx_message.complete = true;
+             g_tx_message.complete = true;  // mark as complete
         } else {
-             // Empty message
+             // Empty message, sends just a newline
              g_tx_message.buffer[0] = '\n';
              g_tx_message.buffer[1] = '\0';
              g_tx_message.length = 1;
@@ -146,41 +168,54 @@ static void send_tx_message(void) {
 }
 
 static void clear_tx_message(void) {
+    /*
+    Clears the message buffer
+    */
     if (xSemaphoreTake(xTxMsgMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        memset(g_tx_message.buffer, 0, MSG_BUFFER_SIZE);
+        memset(g_tx_message.buffer, 0, MSG_BUFFER_SIZE);                // clear buffer
         g_tx_message.length = 0;
-        g_tx_message.complete = false;
+        g_tx_message.complete = false;                                  // mark as not complete   
         xSemaphoreGive(xTxMsgMutex);
     }
 }
 
-// Convert Char to Morse (A -> .-)
 static const char* get_morse_from_char(char c) {
-    if (c >= 'a' && c <= 'z') c -= 32; // Convert to uppercase
-    for (int i = 0; i < 36; i++) {
-        if (alphabet_map[i] == c) return morse_map[i];
+    /*
+    Translates letters to morse code using predefined maps (A -> .-)
+    */
+    if (c >= 'a' && c <= 'z') c -= 32;                                  // Convert to uppercase using an ASCII trick
+    for (int i = 0; i < 36; i++) {                                      // 36 letters/numbers. Loop finds the index
+        if (alphabet_map[i] == c) return morse_map[i];                  // Returns the correct morse symbol based on index
     }
-    return NULL;
+    return NULL; // no character found
 }
 
-// Convert Morse to Char (.- -> A)
 static char get_char_from_morse(const char* morse_str) {
+    /*
+    Translates morse code to letters using predefined maps (.- -> A)
+    */
     for (int i = 0; i < 36; i++) {
-        if (strcmp(morse_str, morse_map[i]) == 0) {
-            return alphabet_map[i];
+        if (strcmp(morse_str, morse_map[i]) == 0) {                     // compare input to what is in the map, (checks if they're the same)
+            return alphabet_map[i];                                     // return the correct letter based on index
         }
     }
     return '?'; // Unknown pattern
 }
 
 static void play_feedback_tone(uint16_t freq_hz, uint16_t duration_ms) {
-    uint32_t cmd = (freq_hz << 16) | duration_ms;
-    xQueueSend(xBuzzerQueue, &cmd, 0);
+    /*
+    Makes the buzzer play a feedback tone via queue
+    */
+    uint32_t cmd = (freq_hz << 16) | duration_ms;                       // pack frequency and duration into a single value: cmd (16+16 bits)
+    xQueueSend(xBuzzerQueue, &cmd, 0);                                  // sends cmd to buzzer queue
 }
 
 static void display_text(const char* text) {
-    if (text && strlen(text) > 0) {
-        xQueueSend(xDisplayQueue, text, 0);
+    /*
+    Displays text on the LCD via queue
+    */
+    if (text && strlen(text) > 0) {                                     // ensure text isn't null and has length 
+        xQueueSend(xDisplayQueue, text, 0);                             // send text to display queue
     }
 }
 
@@ -189,35 +224,48 @@ static void display_text(const char* text) {
 // ==========================================
 
 static void gpio_callback(uint gpio, uint32_t events) {
-    BaseType_t hpw = pdFALSE; 
-    uint32_t now = to_ms_since_boot(get_absolute_time());
+    /*
+    GPIO interrupt handler for buttons
+
+    BUTTON1 (rising edge):
+        - Debounce
+        - Sends ' ' if recording
+
+    BUTTON2:
+        - Falling edge → record press time
+        - Rising edge → measure duration
+            * Long press → '\n' (end message)
+            * Short press → 'T' (toggle)
+*/
+    BaseType_t hpw = pdFALSE;                                           // tracks if sending to a queue unblocked a higher-priority task
+    uint32_t now = to_ms_since_boot(get_absolute_time());               // save current time in ms in a variable
     
-    if (gpio == BUTTON1 && (events & GPIO_IRQ_EDGE_RISE)) {
-        if (now - btn1_last_press_time > BTN1_DEBOUNCE) {
-            btn1_last_press_time = now;
+    if (gpio == BUTTON1 && (events & GPIO_IRQ_EDGE_RISE)) {             // button 1 caused the interrupt
+        if (now - btn1_last_press_time > BTN1_DEBOUNCE) {               // ignore presses that were too quick (debounce)
+            btn1_last_press_time = now;                                 // update last press time
             if (g_state == STATE_RECORDING) {
                 char space = ' ';
-                xQueueSendFromISR(xMorseTxQueue, &space, &hpw);
+                xQueueSendFromISR(xMorseTxQueue, &space, &hpw);         // send space to TX queue if in recording state
             }
         }
     }
-    else if (gpio == BUTTON2) {
+    else if (gpio == BUTTON2) {                                         // button 2 caused the interrupt
         if (events & GPIO_IRQ_EDGE_FALL) {
             btn2_press_time = now;
         }
         else if (events & GPIO_IRQ_EDGE_RISE) {
-            uint32_t press_duration = now - btn2_press_time;
+            uint32_t press_duration = now - btn2_press_time;            // calculate how long button was pressed and check if it was a long press
             if (press_duration >= LONG_PRESS_MS) {
                 if (g_state == STATE_RECORDING) {
                     char end_msg = '\n';  
-                    xQueueSendFromISR(xMorseTxQueue, &end_msg, &hpw);
+                    xQueueSendFromISR(xMorseTxQueue, &end_msg, &hpw);   // if long press and recording, send newline to end msg
                 }
-            } else if (press_duration >= DEBOUNCE_MS) {
+            } else if (press_duration >= DEBOUNCE_MS) {                 // (debounce < duration < long press) --> short press
                 char toggle = 'T';  
-                xQueueSendFromISR(xMorseTxQueue, &toggle, &hpw);
+                xQueueSendFromISR(xMorseTxQueue, &toggle, &hpw);        // if short press, send toggle command to TX queue
             }
-            portYIELD_FROM_ISR(hpw);
-        }
+            portYIELD_FROM_ISR(hpw);                                    // Checks hpw flag from xQueueSendFromISR,
+        }                                                               // if a higher-priority task is ready, portYIELD_FROM_ISR causes it to run immediately
     }
 }
 
@@ -226,12 +274,16 @@ static void gpio_callback(uint gpio, uint32_t events) {
 // ==========================================
 
 static void imu_task(void *arg) {
-    (void)arg;
-    float ax, ay, az, gx, gy, gz, t;
+    /*
+    IMU input task
+    Detects dot/dash gestures and sends them to the TX queue
+    */
+    (void)arg;                                                           // unused FreeRTOS task argument
+    float ax, ay, az, gx, gy, gz, t;                                     // sensor data variables
     
     vTaskDelay(pdMS_TO_TICKS(500)); 
 
-    if (init_ICM42670() == 0) {
+    if (init_ICM42670() == 0) {                                          // initialize IMU
         ICM42670_start_with_default_values();
         usb_serial_print("IMU OK.\n");
     } else {
@@ -241,17 +293,17 @@ static void imu_task(void *arg) {
     }
     
     for (;;) {
-        if (g_state == STATE_RECORDING) {
+        if (g_state == STATE_RECORDING) {                                 // if STATE_RECORDING and IMU data read successfully
             if (ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &t) == 0) {
-                if (az < -0.8f && fabsf(ax) < 0.3f && fabsf(ay) < 0.3f) {
+                if (az < -0.8f && fabsf(ax) < 0.3f && fabsf(ay) < 0.3f) { // dot detected
                     char dot = '.';
-                    xQueueSend(xMorseTxQueue, &dot, 0);
+                    xQueueSend(xMorseTxQueue, &dot, 0);                   // send dot to queue
                     play_feedback_tone(1000, 100);  
                     vTaskDelay(pdMS_TO_TICKS(800)); 
                 }
-                else if (ay < -0.8f && fabsf(ax) < 0.3f) {
+                else if (ay < -0.8f && fabsf(ax) < 0.3f) {                // dash detected
                     char dash = '-';
-                    xQueueSend(xMorseTxQueue, &dash, 0);
+                    xQueueSend(xMorseTxQueue, &dash, 0);                  // send dash to queue
                     play_feedback_tone(1000, 300);  
                     vTaskDelay(pdMS_TO_TICKS(800)); 
                 }
@@ -273,12 +325,9 @@ static void usb_tx_task(void *arg) {
             // Command Processing
             if (symbol == 'T') { 
                 if (g_state == STATE_IDLE || g_state == STATE_RECEIVING || g_state == STATE_DISPLAYING) {
-                    // === IMPROVEMENT START ===
                     // Stop any incoming audio playback immediately
                     xQueueReset(xMorseRxQueue);
                     xQueueReset(xBuzzerQueue);
-                    // === IMPROVEMENT END ===
-
                     clear_tx_message();
                     change_state(STATE_RECORDING);
                     play_feedback_tone(2000, 100); 
@@ -465,68 +514,74 @@ static void usb_rx_task(void *arg) {
 }
 
 static void display_task(void *arg) {
-    (void)arg;
-    char msg_buf[64]; 
+    /*
+    Manages display output
+    Writes message from queue on the screen. Scrolls if too long.
+    */
+    (void)arg;                                                                  // unused FreeRTOS task argument
+    char msg_buf[64];                                                           // buffer for messages from queue
     init_display();
     clear_display();
     write_text("Ready!");
     
     for (;;) {
-        if (xQueueReceive(xDisplayQueue, msg_buf, portMAX_DELAY) == pdTRUE) {
+        if (xQueueReceive(xDisplayQueue, msg_buf, portMAX_DELAY) == pdTRUE) {   // wait for message from queue and store in msg_buf (portMAX_DELAY --> wait indefinitely)
             if (strlen(msg_buf) > 10) {
-                scroll_text(msg_buf, 24, 30); 
+                scroll_text(msg_buf, 24, 30);                                   // long message, scroll (with the function that was added to the library)
             } else {
                 clear_display();
-                write_text(msg_buf);
+                write_text(msg_buf);                                            // short message, just write
             }
         }
     }
 }
 
 static void buzzer_task(void *arg) {
-    (void)arg;
-    uint32_t cmd;
+    /*
+    Manages buzzer output
+    - Plays tones from xBuzzerQueue (msg: freq + duration)
+    - Plays morse beeps from xMorseRxQueue
+    */
+    (void)arg;                                                                  // unused FreeRTOS task argument
+    uint32_t cmd;                                                               // packed frequency and duration for buzzer
     char morse_symbol;
     init_buzzer();
     
     for (;;) {
-        if (xQueueReceive(xBuzzerQueue, &cmd, 0) == pdTRUE) {
+        if (xQueueReceive(xBuzzerQueue, &cmd, 0) == pdTRUE) {                   // check if there is a command in the buzzer queue (frequency + duration)
             uint16_t freq = (cmd >> 16) & 0xFFFF;
-            uint16_t duration = cmd & 0xFFFF;
-            buzzer_play_tone(freq, duration);
+            uint16_t duration = cmd & 0xFFFF;                                   // extract frequency and duration into seperate variables (16 bits each)
+            buzzer_play_tone(freq, duration);                                   
         }
-        else if (xQueueReceive(xMorseRxQueue, &morse_symbol, 0) == pdTRUE) {
-            if (morse_symbol == '\0') {
-                // === BUG FIX START ===
-                // Only revert to IDLE if we are in a passive state.
-                // If the user has already switched to RECORDING, do NOT override it.
+
+        else if (xQueueReceive(xMorseRxQueue, &morse_symbol, 0) == pdTRUE) {    // check morse queue for incoming symbols
+            if (morse_symbol == '\0') {                                         // morse message has ended
                 if (xSemaphoreTake(xStateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
                     if (g_state == STATE_RECEIVING || g_state == STATE_DISPLAYING || g_state == STATE_IDLE) {
-                        g_state = STATE_IDLE;
-                        // Optional: Update display to IDLE if needed, 
-                        // but usually better to leave it to the state manager.
-                        // change_state(STATE_IDLE); <--- Avoid calling this inside the mutex to prevent deadlock
+                        g_state = STATE_IDLE;                                   // thread safe: revert to IDLE only if not recording
                     }
                     xSemaphoreGive(xStateMutex);
                     
-                    // Safe to call change_state here if we confirmed we want to switch
-                    if (g_state == STATE_IDLE) {
+                    if (g_state == STATE_IDLE) {                                // update display if in STATE_IDLE
                         char msg[] = "IDLE";
                         xQueueSend(xDisplayQueue, msg, 0);
                     }
                 }
-                // === BUG FIX END ===
             }
+            
             else if (morse_symbol == '.') buzzer_play_tone(800, 150);
             else if (morse_symbol == '-') buzzer_play_tone(800, 450);
-            else if (morse_symbol == ' ') vTaskDelay(pdMS_TO_TICKS(200));
+            else if (morse_symbol == ' ') vTaskDelay(pdMS_TO_TICKS(200));       // play corresponding sounds or delays
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
 static void tinyusb_task(void *arg) {
-    (void)arg;
+    /*
+    TinyUSB background task
+    */
+    (void)arg;                                                                  // unused FreeRTOS task argument
     for (;;) {
         tud_task();
         vTaskDelay(pdMS_TO_TICKS(1));
@@ -534,14 +589,17 @@ static void tinyusb_task(void *arg) {
 }
 
 static void state_manager_task(void *arg) {
-    (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(2000));
+    /*
+    Checks system state and manages timed transitions
+    */
+    (void)arg;                                                                  // unused FreeRTOS task argument
+    vTaskDelay(pdMS_TO_TICKS(2000));                                            // wait 2 seconds for system to stabilize
     usb_serial_print("\n=== System Ready (Dual Mode) ===\n");
     
     for (;;) {
         if (g_state == STATE_DISPLAYING) {
-            vTaskDelay(pdMS_TO_TICKS(3000));
-            if (g_state == STATE_DISPLAYING) change_state(STATE_IDLE);
+            vTaskDelay(pdMS_TO_TICKS(3000));                                    // display for 3 seconds
+            if (g_state == STATE_DISPLAYING) change_state(STATE_IDLE);          // back to IDLE if still displaying
         }
         vTaskDelay(pdMS_TO_TICKS(500));
     }
