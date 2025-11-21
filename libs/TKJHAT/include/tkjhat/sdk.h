@@ -696,6 +696,9 @@ void draw_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1);
  * @note Calls @c ssd1306_show() internally.
  */
 void draw_square(uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool fill);
+
+
+
 /*
 NAYREED
 */
@@ -703,6 +706,11 @@ NAYREED
  * @brief Scrolls text across the screen from right to left.
  */
 void scroll_text(const char *text, int16_t y, int delay_ms);
+
+
+
+
+
 /* @brief Clear the display.
  *
  * Clears the off-screen buffer and updates the panel (screen goes blank).

@@ -1,11 +1,12 @@
 /*
- * JTKJ Module2 Final Project - Tier 2 (Dual Mode RX)
+ * JTKJ Module 2 Final Project - Tier 2-3
  * Authors: Rezwan Ahmad Nayreed, Joni Lahtinen and Aati Samuel Strömmer
- * * Description:
- * This firmware implements a Morse Code communicator.
- * * NEW FEATURES (Dual Mode RX):
- * 1. Text-to-Morse: If PC sends "SOS", device plays "... --- ..." and displays it.
- * 2. Morse-to-Text: If PC sends "... --- ...", device plays it and displays "SOS".
+ * This is a morse Pico-based morse code communicator. 
+ * Button 1 is used for separating characters (short press) or adding spaces (double press).
+ * Button 2 is used for starting/stopping recording and sending message to terminal.
+ * Text sent into the device is translated to/from morse code and displayed on the screen.
+ * Included SDK has updated scrolling function for long messages.
+ * Parts of the program were generated using Gemini AI and manually curated/debugged by the authors.
 */
 
 #include <pico/stdlib.h>
@@ -24,7 +25,7 @@
 // ==========================================
 
 #define CDC_ITF_TX 1  
-#define QUEUE_LEN  32 
+#define QUEUE_LEN  256 
 #define MSG_BUFFER_SIZE 256 
 
 #define DEBOUNCE_MS     50   
@@ -83,14 +84,14 @@ static SemaphoreHandle_t xStateMutex;
 static SemaphoreHandle_t xTxMsgMutex; 
 
 // Prototypes
-static void imu_task(void *arg);
-static void usb_tx_task(void *arg);
-static void usb_rx_task(void *arg);
-static void display_task(void *arg);
-static void buzzer_task(void *arg);
-static void state_manager_task(void *arg);
-static void tinyusb_task(void *arg); 
-static void gpio_callback(uint gpio, uint32_t events);
+static void imu_task(void *arg);/*NAYREED*/
+static void usb_tx_task(void *arg);/*AATI*/
+static void usb_rx_task(void *arg); /*NAYREED, JONI, AATI*/
+static void display_task(void *arg);/*NAYREED*/
+static void buzzer_task(void *arg);/*NAYREED*/
+static void state_manager_task(void *arg);/*JONI*/
+static void tinyusb_task(void *arg); /*AATI*/
+static void gpio_callback(uint gpio, uint32_t events);/*JONI*/
 
 // ==========================================
 // --- Helper Functions ---
@@ -273,12 +274,9 @@ static void usb_tx_task(void *arg) {
             // Command Processing
             if (symbol == 'T') { 
                 if (g_state == STATE_IDLE || g_state == STATE_RECEIVING || g_state == STATE_DISPLAYING) {
-                    // === IMPROVEMENT START ===
                     // Stop any incoming audio playback immediately
                     xQueueReset(xMorseRxQueue);
                     xQueueReset(xBuzzerQueue);
-                    // === IMPROVEMENT END ===
-
                     clear_tx_message();
                     change_state(STATE_RECORDING);
                     play_feedback_tone(2000, 100); 
@@ -497,7 +495,6 @@ static void buzzer_task(void *arg) {
         }
         else if (xQueueReceive(xMorseRxQueue, &morse_symbol, 0) == pdTRUE) {
             if (morse_symbol == '\0') {
-                // === BUG FIX START ===
                 // Only revert to IDLE if we are in a passive state.
                 // If the user has already switched to RECORDING, do NOT override it.
                 if (xSemaphoreTake(xStateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -515,7 +512,6 @@ static void buzzer_task(void *arg) {
                         xQueueSend(xDisplayQueue, msg, 0);
                     }
                 }
-                // === BUG FIX END ===
             }
             else if (morse_symbol == '.') buzzer_play_tone(800, 150);
             else if (morse_symbol == '-') buzzer_play_tone(800, 450);
