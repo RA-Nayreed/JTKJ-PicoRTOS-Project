@@ -9,15 +9,6 @@
  * Parts of the program were generated using Gemini AI and manually curated/debugged by the authors.
 */
 
-/*
-Documentation progress:
-- FreeRTOS tasks
-    - usb_tx_task
-    - usb_rx_task
-- Main
-
-Remove from list when finished
-*/
 
 #include <pico/stdlib.h>
 #include <FreeRTOS.h>
@@ -314,197 +305,185 @@ static void imu_task(void *arg) {
 }
 
 static void usb_tx_task(void *arg) {
-    (void)arg;
+    /*
+    Handles morse inputs, manages states and sends complete messages (transmitting data)
+    */
+    (void)arg;                                                          // unused FreeRTOS task argument
     char symbol;
-    char current_morse[8] = {0}; 
-    uint8_t morse_len = 0;
+    char current_morse[8] = {0};                                        // single morse letter buffer (max 7 symbols + null)
+    uint8_t morse_len = 0;                                              // number of dots/dashes collected so far
 
     for (;;) {
-        if (xQueueReceive(xMorseTxQueue, &symbol, portMAX_DELAY) == pdTRUE) {
+        if (xQueueReceive(xMorseTxQueue, &symbol, portMAX_DELAY) == pdTRUE) { // Wait forever (portMAX_DELAY) for a symbol from the morse queue
             
-            // Command Processing
-            if (symbol == 'T') { 
+            if (symbol == 'T') {                                        // receive T for toggle while not recording --> switch state to recording
                 if (g_state == STATE_IDLE || g_state == STATE_RECEIVING || g_state == STATE_DISPLAYING) {
-                    // Stop any incoming audio playback immediately
                     xQueueReset(xMorseRxQueue);
-                    xQueueReset(xBuzzerQueue);
-                    clear_tx_message();
+                    xQueueReset(xBuzzerQueue);                          
+                    clear_tx_message();                                 // prevent interference from other queues and reset the message
                     change_state(STATE_RECORDING);
                     play_feedback_tone(2000, 100); 
                     morse_len = 0;
-                    memset(current_morse, 0, sizeof(current_morse));
+                    memset(current_morse, 0, sizeof(current_morse));    // feedback sound + reset morse buffer
                 } 
-                else if (g_state == STATE_RECORDING) {
+                else if (g_state == STATE_RECORDING) {                  // receive T for toggle while recording --> switch to idle state
                     change_state(STATE_IDLE);
-                    play_feedback_tone(1500, 100); 
+                    play_feedback_tone(1500, 100);
                 }
                 continue;
             }
-            else if (symbol == '\n') { 
+            else if (symbol == '\n') {                                  // receive \n, end of message --> reset morse buffer, finalize msg and switch to STATE_SENDING
                 morse_len = 0;
                 memset(current_morse, 0, sizeof(current_morse));
-                send_tx_message();
+                send_tx_message();                                      // finalize msg
                 change_state(STATE_SENDING);
             }
             
-            // Morse Translation Logic (IMU -> Text)
-            if (g_state == STATE_RECORDING) {
+            if (g_state == STATE_RECORDING) {                           // if recording and symbols ./-
                 if (symbol == '.' || symbol == '-') {
                     if (morse_len < 7) {
-                        current_morse[morse_len++] = symbol;
-                        current_morse[morse_len] = '\0';
-                        usb_serial_print(current_morse); 
-                        usb_serial_print("\n");
+                        current_morse[morse_len++] = symbol;            // stores ./- in current_morse and increases morse_len by 1
+                        current_morse[morse_len] = '\0';                // null termination
+                        usb_serial_print(current_morse);
+                        usb_serial_print("\n");                         // print current morse buffer + new line
                     } else {
-                        morse_len = 0;
+                        morse_len = 0;                                  // reset length and buffer if over 7 characters
                         memset(current_morse, 0, sizeof(current_morse));
                     }
                 } 
-                else if (symbol == ' ') {
-                    if (morse_len == 0) {
+                else if (symbol == ' ') {                               // receive space
+                    if (morse_len == 0) {                               // no inputs so far --> this is a word separator --> append space
                         append_to_tx_message(' ');
-                    } else {
-                        char translated_char = '?'; 
-                        for (int i = 0; i < 36; i++) {
-                            if (strcmp(current_morse, morse_map[i]) == 0) {
-                                translated_char = alphabet_map[i];
-                                break;
-                            }
-                        }
+                    } else {                                            // length > 0 --> translate character (using function) and append
+                        char translated_char = get_char_from_morse(current_morse);
                         append_to_tx_message(translated_char);
-                        char lcd_buf[2] = {translated_char, '\0'};
+                        char lcd_buf[2] = {translated_char, '\0'};      // prepare buffer for a single character + null and send to display queue
                         display_text(lcd_buf);
                     }
                     morse_len = 0;
-                    memset(current_morse, 0, sizeof(current_morse));
+                    memset(current_morse, 0, sizeof(current_morse));    // reset
                 }
             }
         }
         
         // Sending Logic
-        if (g_state == STATE_SENDING && g_tx_message.complete) {
+        if (g_state == STATE_SENDING && g_tx_message.complete) {        // if sending state and msg marked complete by send_tx_message()
             usb_serial_print("\n[SENDING]\n");
-            if (tud_cdc_n_connected(CDC_ITF_TX)) {
+
+            if (tud_cdc_n_connected(CDC_ITF_TX)) {                      // If USB host is connected, send the completed TX message over CDC and play a feedback tone 
                 tud_cdc_n_write(CDC_ITF_TX, g_tx_message.buffer, g_tx_message.length);
                 tud_cdc_n_write_flush(CDC_ITF_TX);
-                play_feedback_tone(2500, 200); 
+                play_feedback_tone(2500, 200);
             }
             clear_tx_message();
-            change_state(STATE_IDLE);
+            change_state(STATE_IDLE);                                   // reset msg and set state to idle
         }
     }
 }
 
-/**
- * Task: USB RX (Dual Mode)
- * Handles both Text Input (translates to Morse) AND Raw Morse Input (translates to Text).
- */
 static void usb_rx_task(void *arg) {
-    (void)arg;
-    char rx_buf[64];
-    
-    // Buffer to hold incoming raw Morse code (dots/dashes) until a space is found
-    char incoming_morse_buf[8]; 
-    int incoming_morse_idx = 0;
-    memset(incoming_morse_buf, 0, sizeof(incoming_morse_buf));
+    /*
+    Receives data from usb and does corresponding action
+    CASE 1, Morse:          play sound and store in buffer
+    CASE 2, Space:          don't play sound (gap), translate symbols and store in buffer
+    CASE 3, Letters:        translate symbols, store in buffer and play sound or gap
+    CASE 4, Newline:        translate symbols, display msg, send end signal to buzzer, clear buffer
+    */
+    (void)arg;                                                          // unused FreeRTOS task argument
+    char rx_buf[64];                                                    // buffer for incoming usb data
+    char incoming_morse_buf[8];                                         // buffer to hold incoming raw morse code (dots/dashes)
+    int incoming_morse_idx = 0;                                         // number of symbols stored so far (index for incoming_morse_buf)
+    memset(incoming_morse_buf, 0, sizeof(incoming_morse_buf));          // make sure buffer is empty at startup
 
     for (;;) {
-        if (tud_cdc_n_connected(CDC_ITF_TX) && tud_cdc_n_available(CDC_ITF_TX)) {
-            uint32_t count = tud_cdc_n_read(CDC_ITF_TX, rx_buf, sizeof(rx_buf) - 1);
+        if (tud_cdc_n_connected(CDC_ITF_TX) && tud_cdc_n_available(CDC_ITF_TX)) {       // if usb host ready and data available
+            uint32_t count = tud_cdc_n_read(CDC_ITF_TX, rx_buf, sizeof(rx_buf) - 1);    // read incoming usb data into buffer, get number of bytes read
             
-            if (count > 0) {
-                rx_buf[count] = '\0';
-                change_state(STATE_RECEIVING); 
+            if (count > 0) {                                            // if data was received
+                rx_buf[count] = '\0'; 
+                change_state(STATE_RECEIVING);                          // null terminate buffer to make it into a valid C string and change state
                 
-                for (uint32_t i = 0; i < count; i++) {
+                for (uint32_t i = 0; i < count; i++) {                  // process each character
                     char c = rx_buf[i];
-
-                    // --- CASE 1: Raw Morse Input (. or -) ---
-                    if (c == '.' || c == '-') {
-                        // Play sound immediately
-                        xQueueSend(xMorseRxQueue, &c, 0);
+                    
+                    // CASE 1: Morse symbols
+                    if (c == '.' || c == '-') {         
+                        xQueueSend(xMorseRxQueue, &c, 0);               // queue symbol for audio feedback (buzzer task)
                         
-                        // Accumulate in local buffer
-                        if (incoming_morse_idx < 7) {
+                        if (incoming_morse_idx < 7) {                   // store symbol in local buffer for later decoding (up to 7 symbols + null)
                             incoming_morse_buf[incoming_morse_idx++] = c;
                             incoming_morse_buf[incoming_morse_idx] = '\0';
                         }
                     }
-                    // --- CASE 2: End of Morse Character (Space) ---
+                    
+                    // CASE 2: Space
                     else if (c == ' ') {
-                        // Queue silence
                         char gap = ' ';
-                        xQueueSend(xMorseRxQueue, &gap, 0);
+                        xQueueSend(xMorseRxQueue, &gap, 0);             // queue a silent gap
 
-                        // If we have accumulated dots/dashes, translate them!
                         if (incoming_morse_idx > 0) {
-                            char decoded = get_char_from_morse(incoming_morse_buf);
+                            char decoded = get_char_from_morse(incoming_morse_buf);     // translate accumulated dots/dashes from buffer to characters, if there are any
                             
-                            // Add DECODED TEXT to display buffer
-                            if (g_rx_message.length < MSG_BUFFER_SIZE - 1) {
-                                g_rx_message.buffer[g_rx_message.length++] = decoded;
-                                g_rx_message.buffer[g_rx_message.length] = '\0';
+                            if (g_rx_message.length < MSG_BUFFER_SIZE - 1) {            // ensure there is space in global rx msg buffer (-1 for null terminator)
+                                g_rx_message.buffer[g_rx_message.length++] = decoded;   
+                                g_rx_message.buffer[g_rx_message.length] = '\0';        // append translated character and increase length (+ null)
                             }
                             
-                            // Reset local morse accumulator
                             incoming_morse_idx = 0;
-                            memset(incoming_morse_buf, 0, sizeof(incoming_morse_buf));
+                            memset(incoming_morse_buf, 0, sizeof(incoming_morse_buf));  // clear local temp buffer for the next character
                         } else {
-                            // Just a normal space between words
-                            if (g_rx_message.length < MSG_BUFFER_SIZE - 1) {
+                            if (g_rx_message.length < MSG_BUFFER_SIZE - 1) {            
                                 g_rx_message.buffer[g_rx_message.length++] = ' ';
-                                g_rx_message.buffer[g_rx_message.length] = '\0';
+                                g_rx_message.buffer[g_rx_message.length] = '\0';        // if no symbols were accumulated, do the same but append space instead (word separation)
                             }
                         }
                     }
-                    // --- CASE 3: Regular English Text (A-Z) ---
+
+                    // CASE 3: Normal letters
                     else {
-                        const char* morse_code = get_morse_from_char(c);
-                        if (morse_code != NULL) {
-                            // Add MORSE to display buffer (User typed text, show morse)
-                            if (g_rx_message.length + strlen(morse_code) + 1 < MSG_BUFFER_SIZE) {
-                                strcat(g_rx_message.buffer, morse_code);
-                                strcat(g_rx_message.buffer, " "); 
-                                g_rx_message.length += strlen(morse_code) + 1;
+                        const char* morse_code = get_morse_from_char(c);                // save translated morse symbol into const
+                        if (morse_code != NULL) {                                       // proceed if valid
+
+                            if (g_rx_message.length + strlen(morse_code) + 1 < MSG_BUFFER_SIZE) {   // ensure there is enough space in rx msg buffer for morse string
+                                strcat(g_rx_message.buffer, morse_code); 
+                                strcat(g_rx_message.buffer, " ");                       // append morse string and add space for separation
+                                g_rx_message.length += strlen(morse_code) + 1;          // update length counter
                             }
 
-                            // Queue audio for the translation
-                            for (int j = 0; morse_code[j] != '\0'; j++) {
-                                xQueueSend(xMorseRxQueue, &morse_code[j], 0);
+                            for (int j = 0; morse_code[j] != '\0'; j++) {               
+                                xQueueSend(xMorseRxQueue, &morse_code[j], 0);           // send each ./- to morse queue for audio
                             }
                             char gap = ' '; 
-                            xQueueSend(xMorseRxQueue, &gap, 0); 
+                            xQueueSend(xMorseRxQueue, &gap, 0);                         // pause if space
                         }
                     }
 
-                    // --- CASE 4: End of Message (Newline) ---
+                    // CASE 4: Newline (end of msg)
                     if (c == '\n' || c == '\r') {
-                        // Check if there is leftover raw Morse to decode
-                        if (incoming_morse_idx > 0) {
+                        if (incoming_morse_idx > 0) {                                   // check if there are leftover morse symbols
                             char decoded = get_char_from_morse(incoming_morse_buf);
                             if (g_rx_message.length < MSG_BUFFER_SIZE - 1) {
                                 g_rx_message.buffer[g_rx_message.length++] = decoded;
-                                g_rx_message.buffer[g_rx_message.length] = '\0';
+                                g_rx_message.buffer[g_rx_message.length] = '\0';        // check for space, append, null terminator
                             }
                             incoming_morse_idx = 0;
-                            memset(incoming_morse_buf, 0, sizeof(incoming_morse_buf));
+                            memset(incoming_morse_buf, 0, sizeof(incoming_morse_buf));  // reset for next character
                         }
 
                         // Show Result on LCD
-                        if (g_rx_message.length > 0) {
+                        if (g_rx_message.length > 0) {                                  // check if there is anything in the buffer
                             xQueueSend(xDisplayQueue, g_rx_message.buffer, 0);
                             usb_serial_print("\n[RX]: ");
                             usb_serial_print(g_rx_message.buffer);
-                            usb_serial_print("\n");
+                            usb_serial_print("\n");                                     // add buffer to display queue and print it
                         }
 
                         // Trigger Audio Cleanup
                         char eom = '\0';
-                        xQueueSend(xMorseRxQueue, &eom, portMAX_DELAY);
+                        xQueueSend(xMorseRxQueue, &eom, portMAX_DELAY);                 // send end of msg signal (null) to buzzer
 
-                        // Clean Global Buffer
                         memset(g_rx_message.buffer, 0, MSG_BUFFER_SIZE);
-                        g_rx_message.length = 0;
+                        g_rx_message.length = 0;                                        // reset global buffer
                     }
                 }
             }
@@ -527,7 +506,7 @@ static void display_task(void *arg) {
     for (;;) {
         if (xQueueReceive(xDisplayQueue, msg_buf, portMAX_DELAY) == pdTRUE) {   // wait for message from queue and store in msg_buf (portMAX_DELAY --> wait indefinitely)
             if (strlen(msg_buf) > 10) {
-                scroll_text(msg_buf, 24, 30);                                   // long message, scroll (with the function that was added to the library)
+                scroll_text(msg_buf, 24, 30);                                   // long message, scroll with the function that was added to the library (included in Tier 3 submission)
             } else {
                 clear_display();
                 write_text(msg_buf);                                            // short message, just write
@@ -606,21 +585,27 @@ static void state_manager_task(void *arg) {
 }
 
 int main(void) {
+    // Initializations
     init_hat_sdk();
     sleep_ms(300);
     init_button1();
     init_button2();
     
-    xMorseTxQueue = xQueueCreate(QUEUE_LEN, sizeof(char));
-    xMorseRxQueue = xQueueCreate(QUEUE_LEN, sizeof(char));
-    xDisplayQueue = xQueueCreate(8, 64 * sizeof(char));
-    xBuzzerQueue = xQueueCreate(8, sizeof(uint32_t));
+    // Create queues for task communication
+    xMorseTxQueue = xQueueCreate(QUEUE_LEN, sizeof(char));  // for sending morse symbols (IMU --> TX task)
+    xMorseRxQueue = xQueueCreate(QUEUE_LEN, sizeof(char));  // for playing sounds (RX/TX --> buzzer task)
+    xDisplayQueue = xQueueCreate(8, 64 * sizeof(char));     // for sending strings to be displayed
+    xBuzzerQueue = xQueueCreate(8, sizeof(uint32_t));       // frequency + duration cmd
+
+    // Mutex for state protection
     xStateMutex = xSemaphoreCreateMutex();
     xTxMsgMutex = xSemaphoreCreateMutex();
     
+    // Enable interrupts for buttons
     gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_RISE, true, &gpio_callback);
     gpio_set_irq_enabled(BUTTON2, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true);
     
+    // Task creation
     xTaskCreate(imu_task, "IMU", 2048, NULL, 2, NULL);
     xTaskCreate(usb_tx_task, "TX", 2048, NULL, 2, NULL);
     xTaskCreate(usb_rx_task, "RX", 2048, NULL, 2, NULL);
@@ -628,6 +613,7 @@ int main(void) {
     xTaskCreate(buzzer_task, "Buz", 1024, NULL, 1, NULL);
     xTaskCreate(state_manager_task, "Mgr", 1024, NULL, 3, NULL);
     
+    // Tinyusb
     TaskHandle_t hUsb;
     xTaskCreate(tinyusb_task, "USB", 2048, NULL, 3, &hUsb);
     #if (configNUMBER_OF_CORES > 1)
@@ -637,6 +623,7 @@ int main(void) {
     tusb_init();
     usb_serial_init();
     
+    // Run everything
     vTaskStartScheduler(); 
     return 0;
 }
