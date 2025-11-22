@@ -25,13 +25,13 @@
 // --- Configuration & Constants ---
 // ==========================================
 
-#define CDC_ITF_TX 1  
-#define QUEUE_LEN  256 
-#define MSG_BUFFER_SIZE 256 
+#define CDC_ITF_TX 1            // usb cdc interface
+#define QUEUE_LEN  256          // default queue length
+#define MSG_BUFFER_SIZE 256     // max size of morse message buffer
 
-#define DEBOUNCE_MS     50   
-#define LONG_PRESS_MS   800  
-#define BTN1_DEBOUNCE   250  
+#define DEBOUNCE_MS     50      // button debounce time in ms
+#define LONG_PRESS_MS   800     // long press time in ms
+#define BTN1_DEBOUNCE   250     // debounce that is specific for button 1
 
 // ==========================================
 // --- Data Structures ---
@@ -48,21 +48,21 @@ typedef enum {
 typedef struct {
     char buffer[MSG_BUFFER_SIZE];
     uint16_t length;
-    bool complete;    
+    bool complete;              // msg complete?
 } MorseMessage;
 
 // ==========================================
 // --- Global Variables ---
 // ==========================================
 
-static volatile SystemState g_state = STATE_IDLE;
-static MorseMessage g_tx_message = {0}; 
-static MorseMessage g_rx_message = {0}; 
+static volatile SystemState g_state = STATE_IDLE;   // current state
+static MorseMessage g_tx_message = {0};             // transmitted msg
+static MorseMessage g_rx_message = {0};             // received msg
 
-static volatile uint32_t btn2_press_time = 0;
-static volatile uint32_t btn1_last_press_time = 0;
+static volatile uint32_t btn2_press_time = 0;       // track how long button 2 was pressed
+static volatile uint32_t btn1_last_press_time = 0;  // track when button 1 was last pressed
 
-// Maps
+// Maps for morse code and the corresponding characters
 const char *morse_map[36] = {
     ".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---", "-.-",
     ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-", "...-",
@@ -76,13 +76,13 @@ const char alphabet_map[36] = {
     '5', '6', '7', '8', '9', '0'
 };
 
-// Handles
-static QueueHandle_t xMorseTxQueue;   
-static QueueHandle_t xMorseRxQueue;   
-static QueueHandle_t xDisplayQueue;   
-static QueueHandle_t xBuzzerQueue;    
-static SemaphoreHandle_t xStateMutex; 
-static SemaphoreHandle_t xTxMsgMutex; 
+// FreeRTOS Handles
+static QueueHandle_t xMorseTxQueue;                 // for sending morse symbols (IMU --> TX task)
+static QueueHandle_t xMorseRxQueue;                 // for playing sounds (RX/TX --> buzzer task)
+static QueueHandle_t xDisplayQueue;                 // for sending strings to be displayed
+static QueueHandle_t xBuzzerQueue;                  // frequency + duration cmd
+static SemaphoreHandle_t xStateMutex;               // mutex to protect state
+static SemaphoreHandle_t xTxMsgMutex;               // mutex to protect tx buffer
 
 // Prototypes
 static void imu_task(void *arg);/*NAYREED*/
@@ -100,7 +100,7 @@ static void gpio_callback(uint gpio, uint32_t events);/*JONI*/
 
 static void change_state(SystemState new_state) {
     /*
-    At core, this is a state machine.
+    At its core, this is a state machine.
     Mutex prevents other tasks from changing the state at the same time
     A short state-name message is sent to the display task via queue so the UI updates when the state changes.
     */
@@ -592,10 +592,10 @@ int main(void) {
     init_button2();
     
     // Create queues for task communication
-    xMorseTxQueue = xQueueCreate(QUEUE_LEN, sizeof(char));  // for sending morse symbols (IMU --> TX task)
-    xMorseRxQueue = xQueueCreate(QUEUE_LEN, sizeof(char));  // for playing sounds (RX/TX --> buzzer task)
-    xDisplayQueue = xQueueCreate(8, 64 * sizeof(char));     // for sending strings to be displayed
-    xBuzzerQueue = xQueueCreate(8, sizeof(uint32_t));       // frequency + duration cmd
+    xMorseTxQueue = xQueueCreate(QUEUE_LEN, sizeof(char));
+    xMorseRxQueue = xQueueCreate(QUEUE_LEN, sizeof(char));
+    xDisplayQueue = xQueueCreate(8, 64 * sizeof(char));
+    xBuzzerQueue = xQueueCreate(8, sizeof(uint32_t));
 
     // Mutex for state protection
     xStateMutex = xSemaphoreCreateMutex();
