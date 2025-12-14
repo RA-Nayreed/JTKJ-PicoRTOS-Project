@@ -110,7 +110,7 @@ add_subdirectory(examples/hello_serial_bidirectional_client)
 # Add the source files to be compiled
 # If you add the headers in a different directory, you should use: target_include_directories
 add_executable(${MAIN_TARGET}
-    src/project.c
+    src/main.c
     
 )
 
